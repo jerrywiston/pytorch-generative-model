@@ -1,0 +1,149 @@
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.nn.parallel
+import torch.backends.cudnn as cudnn
+import torch.optim as optim
+
+from read_celeba import *
+from padding_same_conv import Conv2d
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Decide which device we want to run on
+device = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
+
+def weights_init(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        nn.init.normal_(m.weight.data, 0.0, 0.02)
+    elif classname.find('BatchNorm') != -1:
+        nn.init.normal_(m.weight.data, 1.0, 0.02)
+        nn.init.constant_(m.bias.data, 0)
+
+class Generator(nn.Module):
+    def __init__(self, z_dim):
+        super(Generator, self).__init__()
+        self.fc1 = nn.Linear(z_dim, 8*8*512)
+        
+        self.up2 = nn.Upsample(scale_factor=2, mode='nearest')
+        self.conv2 = Conv2d(512, 256, 3)
+        self.bn2 = nn.BatchNorm2d(256)
+
+        self.up3 = nn.Upsample(scale_factor=2, mode='nearest')
+        self.conv3 = Conv2d(256, 128, 5)
+        self.bn3 = nn.BatchNorm2d(128)
+        
+        self.up4 = nn.Upsample(scale_factor=2, mode='nearest')
+        self.conv4 = Conv2d(128, 3, 5)
+
+    def forward(self, z):
+        self.h_conv1 = F.relu(self.fc1(z).view(-1,512,8,8)) 
+        # (512, 8, 8)
+        self.h_conv2 = self.up2(self.h_conv1)
+        self.h_conv2 = self.conv2(self.h_conv2)
+        self.h_conv2 = F.relu(self.bn2(self.h_conv2))
+        # (256, 16, 16)
+        self.h_conv3 = self.up3(self.h_conv2)
+        self.h_conv3 = self.conv3(self.h_conv3)
+        self.h_conv3 = F.relu(self.bn3(self.h_conv3))
+        # (128, 32, 32)
+        self.h_conv4 = self.up4(self.h_conv3)
+        self.h_conv4 = self.conv4(self.h_conv4)
+        self.x_samp = torch.sigmoid(self.h_conv4)
+        return self.x_samp
+
+class Discriminator(nn.Module):
+    def __init__(self):
+        super(Discriminator, self).__init__()
+        self.conv1 = Conv2d(3, 64, 5, stride=2)
+        
+        self.conv2 = Conv2d(64, 128, 5, stride=2)
+        self.bn2 = nn.BatchNorm2d(128)
+        
+        self.conv3 = Conv2d(128, 256, 5, stride=2)
+        self.bn3 = nn.BatchNorm2d(256)
+        
+        self.conv4 = Conv2d(256, 512, 3, stride=2)
+        self.bn4 = nn.BatchNorm2d(512)
+        
+        self.fc5 = nn.Linear(4*4*512, 1)
+
+    def forward(self, x):
+        self.h_conv1 = F.relu(self.conv1(x))
+        # (64, 32, 32)
+        self.h_conv2 = self.conv2(self.h_conv1)
+        self.h_conv2 = F.relu(self.bn2(self.h_conv2))
+        # (128, 16, 16)
+        self.h_conv3 = self.conv3(self.h_conv2)
+        self.h_conv3 = F.relu(self.bn3(self.h_conv3))
+        # (256, 8, 8)
+        self.h_conv4 = self.conv4(self.h_conv3)
+        self.h_conv4 = F.relu(self.bn4(self.h_conv4))
+        # (512, 4, 4)
+        self.y_logit = self.fc5(self.h_conv4.view(-1,512*4*4))
+        self.y_prob = torch.sigmoid(self.y_logit)
+        return self.y_prob, self.y_logit
+
+netG = Generator(z_dim).to(device)
+netG.apply(weights_init)
+netD = Discriminator().to(device)
+netD.apply(weights_init)
+
+criterion = nn.BCELoss()
+optD = optim.Adam(netD.parameters(), lr=1e-4, betas=(0.5, 0.999))
+optG = optim.Adam(netG.parameters(), lr=2e-4, betas=(0.5, 0.999))
+
+z_fixed = torch.randn(64, z_dim, device=device)
+
+out_folder = "out/"
+if not os.path.exists(out_folder):
+    os.makedirs(out_folder)
+print("Starting Training ...")
+for epoch in range(num_epochs):
+    for i, data in enumerate(dataloader, 0):
+        # Initialize
+        netD.zero_grad()
+        netG.zero_grad()
+
+        # Real Batch
+        x_real = data[0].to(device)
+        d_real, _ = netD(x_real)
+        b_size = x_real.size(0)
+        d_label = torch.full((b_size, 1), 1.0, device=device)
+        d_real_loss = criterion(d_real, d_label)
+        d_real_loss.backward()
+
+        # Fake Batch
+        z_samp = torch.randn(b_size, z_dim, device=device)
+        x_samp = netG(z_samp)
+        d_fake, _ = netD(x_samp)
+        d_label.fill_(0.0)
+        d_fake_loss = criterion(d_fake, d_label)
+        d_fake_loss.backward()
+        
+        # Update D
+        d_loss = d_real_loss + d_fake_loss
+        optD.step()
+
+        # Update G
+        netG.zero_grad()
+        d_label.fill_(1.0)
+        z_samp = torch.randn(b_size, z_dim, device=device)
+        x_samp = netG(z_samp)
+        d_fake, _ = netD(x_samp)
+        g_loss = criterion(d_fake, d_label)
+        g_loss.backward()
+        optG.step()
+
+        # Results
+        if i % 50 == 0:
+            print("[%d/%d][%d/%d]\tD_loss: %.4f,\tG_loss: %.4f"%(epoch, num_epochs, i, len(dataloader), d_loss.item(), g_loss.item()))
+        
+        if i%200 == 0:
+            x_fixed = netG(z_fixed).cpu().detach()
+            plt.figure(figsize=(8,8))
+            plt.imshow(np.transpose(vutils.make_grid(x_fixed, padding=2, normalize=True).cpu(),(1,2,0)))
+            plt.axis("off")
+            plt.savefig(out_folder+str(epoch).zfill(2)+"_"+str(i).zfill(4)+".jpg", bbox_inches="tight")
