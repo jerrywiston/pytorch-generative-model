@@ -17,11 +17,8 @@ dataroot = "datasets/celeba"
 if not os.path.exists(dataroot):
     os.makedirs(dataroot)
 
-# Batch size during training
-batch_size = 64
 image_size = 64
-z_dim = 100
-num_epochs = 5
+batch_size = 64
 ngpu = 1
 
 # We can use an image folder dataset the way we have it setup.

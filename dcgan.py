@@ -82,9 +82,12 @@ class Discriminator(nn.Module):
         self.h_conv4 = self.conv4(self.h_conv3)
         self.h_conv4 = F.relu(self.bn4(self.h_conv4))
         # (512, 4, 4)
-        self.y_logit = self.fc5(self.h_conv4.view(-1,512*4*4))
-        self.y_prob = torch.sigmoid(self.y_logit)
-        return self.y_prob, self.y_logit
+        self.d_logit = self.fc5(self.h_conv4.view(-1,512*4*4))
+        self.d_prob = torch.sigmoid(self.d_logit)
+        return self.d_prob, self.d_logit
+
+z_dim = 100
+num_epochs = 5
 
 netG = Generator(z_dim).to(device)
 netG.apply(weights_init)
@@ -97,7 +100,7 @@ optG = optim.Adam(netG.parameters(), lr=2e-4, betas=(0.5, 0.999))
 
 z_fixed = torch.randn(64, z_dim, device=device)
 
-out_folder = "out/"
+out_folder = "out/out_dcgan/"
 if not os.path.exists(out_folder):
     os.makedirs(out_folder)
 print("Starting Training ...")
@@ -139,7 +142,7 @@ for epoch in range(num_epochs):
 
         # Results
         if i % 50 == 0:
-            print("[%d/%d][%d/%d]\tD_loss: %.4f,\tG_loss: %.4f"%(epoch, num_epochs, i, len(dataloader), d_loss.item(), g_loss.item()))
+            print("[%d/%d][%d/%d]\tD_loss: %.4f,\tG_loss: %.4f"%(epoch+1, num_epochs, i, len(dataloader), d_loss.item(), g_loss.item()))
         
         if i%200 == 0:
             x_fixed = netG(z_fixed).cpu().detach()
