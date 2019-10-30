@@ -25,30 +25,30 @@ def weights_init(m):
 class Generator(nn.Module):
     def __init__(self, z_dim):
         super(Generator, self).__init__()
-        self.fc1 = nn.Linear(z_dim, 8*8*512)
+        self.fc1 = nn.Linear(z_dim, 8*8*1024)
         
         self.up2 = nn.Upsample(scale_factor=2, mode='nearest')
-        self.conv2 = Conv2d(512, 256, 3)
-        self.bn2 = nn.BatchNorm2d(256)
+        self.conv2 = Conv2d(1024, 512, 3)
+        self.bn2 = nn.BatchNorm2d(512)
 
         self.up3 = nn.Upsample(scale_factor=2, mode='nearest')
-        self.conv3 = Conv2d(256, 128, 5)
-        self.bn3 = nn.BatchNorm2d(128)
+        self.conv3 = Conv2d(512, 256, 5)
+        self.bn3 = nn.BatchNorm2d(256)
         
         self.up4 = nn.Upsample(scale_factor=2, mode='nearest')
-        self.conv4 = Conv2d(128, 3, 5)
+        self.conv4 = Conv2d(256, 3, 5)
 
     def forward(self, z):
         self.h_conv1 = F.relu(self.fc1(z).view(-1,512,8,8)) 
-        # (512, 8, 8)
+        # (1024, 8, 8)
         self.h_conv2 = self.up2(self.h_conv1)
         self.h_conv2 = self.conv2(self.h_conv2)
         self.h_conv2 = F.relu(self.bn2(self.h_conv2))
-        # (256, 16, 16)
+        # (512, 16, 16)
         self.h_conv3 = self.up3(self.h_conv2)
         self.h_conv3 = self.conv3(self.h_conv3)
         self.h_conv3 = F.relu(self.bn3(self.h_conv3))
-        # (128, 32, 32)
+        # (256, 32, 32)
         self.h_conv4 = self.up4(self.h_conv3)
         self.h_conv4 = self.conv4(self.h_conv4)
         self.x_samp = torch.sigmoid(self.h_conv4)
@@ -57,37 +57,37 @@ class Generator(nn.Module):
 class Discriminator(nn.Module):
     def __init__(self):
         super(Discriminator, self).__init__()
-        self.conv1 = Conv2d(3, 64, 5, stride=2)
+        self.conv1 = Conv2d(3, 128, 5, stride=2)
         
-        self.conv2 = Conv2d(64, 128, 5, stride=2)
-        self.bn2 = nn.BatchNorm2d(128)
+        self.conv2 = Conv2d(128, 256, 5, stride=2)
+        self.bn2 = nn.BatchNorm2d(256)
         
-        self.conv3 = Conv2d(128, 256, 5, stride=2)
-        self.bn3 = nn.BatchNorm2d(256)
+        self.conv3 = Conv2d(256, 512, 5, stride=2)
+        self.bn3 = nn.BatchNorm2d(512)
         
-        self.conv4 = Conv2d(256, 512, 3, stride=2)
-        self.bn4 = nn.BatchNorm2d(512)
+        self.conv4 = Conv2d(512, 1024, 3, stride=2)
+        self.bn4 = nn.BatchNorm2d(1024)
         
-        self.fc5 = nn.Linear(4*4*512, 1)
+        self.fc5 = nn.Linear(4*4*1024, 1)
 
     def forward(self, x):
         self.h_conv1 = F.relu(self.conv1(x))
-        # (64, 32, 32)
+        # (128, 32, 32)
         self.h_conv2 = self.conv2(self.h_conv1)
         self.h_conv2 = F.relu(self.bn2(self.h_conv2))
-        # (128, 16, 16)
+        # (256, 16, 16)
         self.h_conv3 = self.conv3(self.h_conv2)
         self.h_conv3 = F.relu(self.bn3(self.h_conv3))
-        # (256, 8, 8)
+        # (512, 8, 8)
         self.h_conv4 = self.conv4(self.h_conv3)
         self.h_conv4 = F.relu(self.bn4(self.h_conv4))
-        # (512, 4, 4)
+        # (1024, 4, 4)
         self.d_logit = self.fc5(self.h_conv4.view(-1,512*4*4))
         self.d_prob = torch.sigmoid(self.d_logit)
         return self.d_prob, self.d_logit
 
-z_dim = 100
-num_epochs = 5
+z_dim = 64
+num_epochs = 20
 
 netG = Generator(z_dim).to(device)
 netG.apply(weights_init)
@@ -100,9 +100,13 @@ optG = optim.Adam(netG.parameters(), lr=2e-4, betas=(0.5, 0.999))
 
 z_fixed = torch.randn(64, z_dim, device=device)
 
-out_folder = "out/out_dcgan/"
+model_name = "gan"
+out_folder = "out/" + model_name + "/"
 if not os.path.exists(out_folder):
     os.makedirs(out_folder)
+save_folder =  "save/" + model_name + "/"
+if not os.path.exists(save_folder):
+    os.makedirs(save_folder)
 print("Starting Training ...")
 for epoch in range(num_epochs):
     for i, data in enumerate(dataloader, 0):
@@ -142,11 +146,16 @@ for epoch in range(num_epochs):
 
         # Results
         if i % 50 == 0:
-            print("[%d/%d][%d/%d]\tD_loss: %.4f,\tG_loss: %.4f"%(epoch+1, num_epochs, i, len(dataloader), d_loss.item(), g_loss.item()))
+            print("[%d/%d][%sd/%d] D_loss: %.4f | G_loss: %.4f"\
+            %(epoch+1, num_epochs, str(i).zfill(4), len(dataloader), d_loss.item(), g_loss.item()))
         
         if i%200 == 0:
+            # Output Images
             x_fixed = netG(z_fixed).cpu().detach()
             plt.figure(figsize=(8,8))
             plt.imshow(np.transpose(vutils.make_grid(x_fixed, padding=2, normalize=True).cpu(),(1,2,0)))
             plt.axis("off")
             plt.savefig(out_folder+str(epoch).zfill(2)+"_"+str(i).zfill(4)+".jpg", bbox_inches="tight")
+            # Save Model
+            torch.save(netG.state_dict(), save_folder+"netGen.pt")
+            torch.save(netD.state_dict(), save_folder+"netDis.pt")

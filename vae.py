@@ -25,34 +25,34 @@ def weights_init(m):
 class Encoder(nn.Module):
     def __init__(self, z_dim):
         super(Encoder, self).__init__()
-        self.conv1 = Conv2d(3, 64, 5, stride=2)
+        self.conv1 = Conv2d(3, 128, 5, stride=2)
         
-        self.conv2 = Conv2d(64, 128, 5, stride=2)
-        self.bn2 = nn.BatchNorm2d(128)
+        self.conv2 = Conv2d(128, 256, 5, stride=2)
+        self.bn2 = nn.BatchNorm2d(256)
         
-        self.conv3 = Conv2d(128, 256, 5, stride=2)
-        self.bn3 = nn.BatchNorm2d(256)
+        self.conv3 = Conv2d(256, 512, 5, stride=2)
+        self.bn3 = nn.BatchNorm2d(512)
         
-        self.conv4 = Conv2d(256, 512, 3, stride=2)
-        self.bn4 = nn.BatchNorm2d(512)
+        self.conv4 = Conv2d(512, 1024, 3, stride=2)
+        self.bn4 = nn.BatchNorm2d(1024)
         
-        self.fc5_mu = nn.Linear(4*4*512, z_dim)
-        self.fc5_logvar = nn.Linear(4*4*512, z_dim)
+        self.fc5_mu = nn.Linear(4*4*1024, z_dim)
+        self.fc5_logvar = nn.Linear(4*4*1024, z_dim)
     
     def forward(self, x):
         self.h_conv1 = F.relu(self.conv1(x))
-        # (64, 32, 32)
+        # (128, 32, 32)
         self.h_conv2 = self.conv2(self.h_conv1)
         self.h_conv2 = F.relu(self.bn2(self.h_conv2))
-        # (128, 16, 16)
+        # (256, 16, 16)
         self.h_conv3 = self.conv3(self.h_conv2)
         self.h_conv3 = F.relu(self.bn3(self.h_conv3))
-        # (256, 8, 8)
+        # (512, 8, 8)
         self.h_conv4 = self.conv4(self.h_conv3)
         self.h_conv4 = F.relu(self.bn4(self.h_conv4))
-        # (512, 4, 4)
-        self.mu = self.fc5_mu(self.h_conv4.view(-1,512*4*4))
-        self.logvar = self.fc5_logvar(self.h_conv4.view(-1,512*4*4))
+        # (1024, 4, 4)
+        self.mu = self.fc5_mu(self.h_conv4.view(-1,1024*4*4))
+        self.logvar = self.fc5_logvar(self.h_conv4.view(-1,1024*4*4))
         return self.mu, self.logvar
 
 def sample_z(mu, logvar):
@@ -62,53 +62,57 @@ def sample_z(mu, logvar):
 class Decoder(nn.Module):
     def __init__(self, z_dim):
         super(Decoder, self).__init__()
-        self.fc1 = nn.Linear(z_dim, 8*8*512)
+        self.fc1 = nn.Linear(z_dim, 8*8*1024)
         
         self.up2 = nn.Upsample(scale_factor=2, mode='nearest')
-        self.conv2 = Conv2d(512, 256, 3)
-        self.bn2 = nn.BatchNorm2d(256)
+        self.conv2 = Conv2d(1024, 512, 3)
+        self.bn2 = nn.BatchNorm2d(512)
 
         self.up3 = nn.Upsample(scale_factor=2, mode='nearest')
-        self.conv3 = Conv2d(256, 128, 5)
-        self.bn3 = nn.BatchNorm2d(128)
+        self.conv3 = Conv2d(512, 256, 5)
+        self.bn3 = nn.BatchNorm2d(256)
         
         self.up4 = nn.Upsample(scale_factor=2, mode='nearest')
-        self.conv4 = Conv2d(128, 3, 5)
+        self.conv4 = Conv2d(256, 3, 5)
 
     def forward(self, z):
-        self.h_conv1 = F.relu(self.fc1(z).view(-1,512,8,8)) 
-        # (512, 8, 8)
+        self.h_conv1 = F.relu(self.fc1(z).view(-1,1024,8,8)) 
+        # (1024, 8, 8)
         self.h_conv2 = self.up2(self.h_conv1)
         self.h_conv2 = self.conv2(self.h_conv2)
         self.h_conv2 = F.relu(self.bn2(self.h_conv2))
-        # (256, 16, 16)
+        # (512, 16, 16)
         self.h_conv3 = self.up3(self.h_conv2)
         self.h_conv3 = self.conv3(self.h_conv3)
         self.h_conv3 = F.relu(self.bn3(self.h_conv3))
-        # (128, 32, 32)
+        # (256, 32, 32)
         self.h_conv4 = self.up4(self.h_conv3)
         self.h_conv4 = self.conv4(self.h_conv4)
         self.x_samp = torch.sigmoid(self.h_conv4)
         return self.x_samp
 
-z_dim = 100
-num_epochs = 5
+z_dim = 64
+num_epochs = 20
 
 netEnc = Encoder(z_dim).to(device)
 netEnc.apply(weights_init)
 netDec = Decoder(z_dim).to(device)
 netDec.apply(weights_init)
 
-criterion = nn.BCELoss()
+criterion = nn.MSELoss()
 params = list(netEnc.parameters()) + list(netDec.parameters())
 opt = optim.Adam(params, lr=2e-4, betas=(0.5, 0.999))
 
 
 z_fixed = torch.randn(64, z_dim, device=device)
 
-out_folder = "out/out_vae/"
+model_name = "vae"
+out_folder = "out/" + model_name + "/"
 if not os.path.exists(out_folder):
     os.makedirs(out_folder)
+save_folder =  "save/" + model_name + "/"
+if not os.path.exists(save_folder):
+    os.makedirs(save_folder)
 print("Starting Training ...")
 for epoch in range(num_epochs):
     for i, data in enumerate(dataloader, 0):
@@ -123,18 +127,23 @@ for epoch in range(num_epochs):
         
         rec_loss = criterion(x_rec, x_real)
         kl_loss = torch.mean(0.5 * torch.sum(torch.exp(z_var) + z_mu**2 - 1. - z_var, 1))
-        loss = rec_loss + 0.001*kl_loss
+        loss = rec_loss + 0.0001*kl_loss
         loss.backward()
         opt.step()
 
         # Results
         if i % 50 == 0:
-            print("[%d/%d][%d/%d]\tRec_loss: %.4f,\tKL_loss: %.4f"%(epoch+1, num_epochs, i, len(dataloader), rec_loss.item(), kl_loss.mean().item()))
-        
+            print("[%d/%d][%s/%d] R_loss: %.4f | KL_loss: %.4f"\
+            %(epoch+1, num_epochs, str(i).zfill(4), len(dataloader), rec_loss.item(), kl_loss.mean().item())
+            
         if i%200 == 0:
+            # Output Images
             x_fixed = netDec(z_fixed).cpu().detach()
             plt.figure(figsize=(8,8))
             plt.imshow(np.transpose(vutils.make_grid(x_fixed, padding=2, normalize=True).cpu(),(1,2,0)))
             plt.axis("off")
             plt.savefig(out_folder+str(epoch).zfill(2)+"_"+str(i).zfill(4)+".jpg", bbox_inches="tight")
             plt.close()
+            # Save Model
+            torch.save(netEnc.state_dict(), save_folder+"netEnc.pt")
+            torch.save(netDec.state_dict(), save_folder+"netDec.pt")
