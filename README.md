@@ -1,4 +1,4 @@
-# pytorch-model
+# PyTorch Generative Model
 Pytorch implementation of several generative model.
 
 ## Requirement
