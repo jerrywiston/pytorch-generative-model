@@ -39,7 +39,7 @@ class Generator(nn.Module):
         self.conv4 = Conv2d(256, 3, 5)
 
     def forward(self, z):
-        self.h_conv1 = F.relu(self.fc1(z).view(-1,512,8,8)) 
+        self.h_conv1 = F.relu(self.fc1(z).view(-1,1024,8,8)) 
         # (1024, 8, 8)
         self.h_conv2 = self.up2(self.h_conv1)
         self.h_conv2 = self.conv2(self.h_conv2)
@@ -82,11 +82,11 @@ class Discriminator(nn.Module):
         self.h_conv4 = self.conv4(self.h_conv3)
         self.h_conv4 = F.relu(self.bn4(self.h_conv4))
         # (1024, 4, 4)
-        self.d_logit = self.fc5(self.h_conv4.view(-1,512*4*4))
+        self.d_logit = self.fc5(self.h_conv4.view(-1,1024*4*4))
         self.d_prob = torch.sigmoid(self.d_logit)
         return self.d_prob, self.d_logit
 
-z_dim = 64
+z_dim = 128
 num_epochs = 20
 
 netG = Generator(z_dim).to(device)
@@ -96,7 +96,7 @@ netD.apply(weights_init)
 
 criterion = nn.BCELoss()
 optD = optim.Adam(netD.parameters(), lr=1e-4, betas=(0.5, 0.999))
-optG = optim.Adam(netG.parameters(), lr=2e-4, betas=(0.5, 0.999))
+optG = optim.Adam(netG.parameters(), lr=4e-4, betas=(0.5, 0.999))
 
 z_fixed = torch.randn(64, z_dim, device=device)
 
@@ -146,7 +146,7 @@ for epoch in range(num_epochs):
 
         # Results
         if i % 50 == 0:
-            print("[%d/%d][%sd/%d] D_loss: %.4f | G_loss: %.4f"\
+            print("[%d/%d][%s/%d] D_loss: %.4f | G_loss: %.4f"\
             %(epoch+1, num_epochs, str(i).zfill(4), len(dataloader), d_loss.item(), g_loss.item()))
         
         if i%200 == 0:
@@ -156,6 +156,7 @@ for epoch in range(num_epochs):
             plt.imshow(np.transpose(vutils.make_grid(x_fixed, padding=2, normalize=True).cpu(),(1,2,0)))
             plt.axis("off")
             plt.savefig(out_folder+str(epoch).zfill(2)+"_"+str(i).zfill(4)+".jpg", bbox_inches="tight")
+            plt.close()
             # Save Model
             torch.save(netG.state_dict(), save_folder+"netGen.pt")
             torch.save(netD.state_dict(), save_folder+"netDis.pt")
