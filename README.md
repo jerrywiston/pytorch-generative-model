@@ -15,16 +15,16 @@ Download the ```img_align_celeba.zip``` from [here](https://drive.google.com/dri
 ```
 python dcgan.py
 ```
-<img src="images/gan.jpg" width="300">
+<img src="images/gan.jpg" width="400">
 
 ### Variational Autoencoder
 ```
 python vae.py
 ```
-<img src="images/vae.jpg" width="300">
+<img src="images/vae.jpg" width="400">
 
 ### Adversarial Autoencoder
 ```
 python aae.py
 ```
-<img src="images/aae.jpg" width="300">
+<img src="images/aae.jpg" width="400">
