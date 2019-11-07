@@ -91,46 +91,51 @@ class Generator(nn.Module):
 class Discriminator(nn.Module):
     def __init__(self, z_dim):
         super(Discriminator, self).__init__()
+        # X
         self.conv1 = Conv2d(3, 128, 5, stride=2)
-
         self.conv2 = Conv2d(128, 256, 5, stride=2)
         self.bn2 = nn.BatchNorm2d(256)
-        
         self.conv3 = Conv2d(256, 512, 5, stride=2)
         self.bn3 = nn.BatchNorm2d(512)
-        
         self.conv4 = Conv2d(512, 1024, 3, stride=2)
         self.bn4 = nn.BatchNorm2d(1024)
-        
         self.fc5 = nn.Linear(4*4*1024, 512)
-        self.fc6 = nn.Linear(1024, 1)
+        self.fc6 = nn.Linear(512, 1)
 
+        # Z
         self.zfc1 = nn.Linear(z_dim, 512)
         self.zfc2 = nn.Linear(512, 512)
-        self.zfc3 = nn.Linear(512, 512)
+        self.zfc3 = nn.Linear(512, 1)
+
+        # Cat
+        self.fc1_cat = nn.Linear(1024, 512)
+        self.fc2_cat = nn.Linear(512, 1)
 
     def forward(self, x, z):
-        self.h_conv1 = F.relu(self.conv1(x))
-        # (128, 32, 32)
-        self.h_conv2 = self.conv2(self.h_conv1)
-        self.h_conv2 = F.relu(self.bn2(self.h_conv2))
-        # (256, 16, 16)
-        self.h_conv3 = self.conv3(self.h_conv2)
-        self.h_conv3 = F.relu(self.bn3(self.h_conv3))
-        # (512, 8, 8)
-        self.h_conv4 = self.conv4(self.h_conv3)
-        self.h_conv4 = F.relu(self.bn4(self.h_conv4))
-        # (1024, 4, 4)
-        self.hx5 = self.fc5(self.h_conv4.view(-1,1024*4*4))
+        # X Path
+        self.hx_conv1 = F.relu(self.conv1(x))
+        self.hx_conv2 = self.conv2(self.hx_conv1)
+        self.hx_conv2 = F.relu(self.bn2(self.hx_conv2))
+        self.hx_conv3 = self.conv3(self.hx_conv2)
+        self.hx_conv3 = F.relu(self.bn3(self.hx_conv3))
+        self.hx_conv4 = self.conv4(self.hx_conv3)
+        self.hx_conv4 = F.relu(self.bn4(self.hx_conv4))
+        self.hx5 = self.fc5(self.hx_conv4.view(-1,1024*4*4))
+        self.dx_logit = self.fc6(self.hx5)
+        self.dx_prob = torch.sigmoid(self.dx_logit)
 
-        self.hz1 = F.relu(self.fc1(z))
-        self.hz2 = F.relu(self.fc2(self.h1))
-        self.hz3 = F.relu(self.fc3(self.h2))
+        # Z Path
+        self.hz1 = F.relu(self.zfc1(z))
+        self.hz2 = F.relu(self.zfc2(self.hz1))
+        self.dz_logit = self.zfc3(self.hz2)
+        self.dz_prob = torch.sigmoid(self.dz_logit)
 
-        self.h_concat = torch.cat([self.hx5, self.hz3])
-        self.d_logit = self.fc6(self.h_concat)
-        self.d_prob = torch.sigmoid(self.d_logit)
-        return self.d_prob, self.d_logit
+        # Cat Path
+        self.h_cat = torch.cat([self.hx5, self.hz2], 1)
+        self.h1_cat = self.fc1_cat(self.h_cat)
+        self.dc_logit = self.fc2_cat(self.h1_cat)
+        self.dc_prob = torch.sigmoid(self.dc_logit)
+        return self.dx_prob, self.dz_prob, self.dc_prob
 
 z_dim = 64
 num_epochs = 20
@@ -146,9 +151,12 @@ optEnc = optim.Adam(netEnc.parameters(), lr=2e-4, betas=(0.5, 0.999))
 optGen = optim.Adam(netGen.parameters(), lr=2e-4, betas=(0.5, 0.999))
 optDis = optim.Adam(netDis.parameters(), lr=1e-4, betas=(0.5, 0.999))
 
-z_fixed = torch.randn(64, z_dim, device=device)
+for i, data in enumerate(dataloader, 0):
+    x_fixed = data[0].to(device)
+    break
+z_fixed = torch.randn(32, z_dim, device=device)
 
-model_name = "ali"
+model_name = "ali2"
 out_folder = "out/" + model_name + "/"
 if not os.path.exists(out_folder):
     os.makedirs(out_folder)
@@ -159,7 +167,7 @@ if not os.path.exists(save_folder):
 def zero_grad_list(net_list):
     for net in net_list:
         net.zero_grad()
-
+pre_epoch = 2
 print("Starting Training ...")
 for epoch in range(num_epochs):
     for i, data in enumerate(dataloader, 0):
@@ -174,43 +182,69 @@ for epoch in range(num_epochs):
         zero_grad_list([netEnc, netGen, netDis])
         # X -> Z
         z_enc = netEnc(x_real)
-        d0_prob, d0_logit = netDis(x_real, z_enc)
-        d0_loss = nn.BCELoss(d0_prob, zeros)
+        dx0_prob, dz0_prob, dc0_prob = netDis(x_real, z_enc)
+        dx0_loss = nn.BCELoss()(dx0_prob, ones) # Real
+        dz0_loss = nn.BCELoss()(dz0_prob, zeros) # Fake
+        dc0_loss = nn.BCELoss()(dc0_prob, zeros) # Mode 0
         # Z -> X
         x_gen = netGen(z_real)
-        d1_prob, d1_logit = netDis(x_gen, z_real)
-        d1_loss = nn.BCELoss(d1_prob, ones)
+        dx1_prob, dz1_prob, dc1_prob = netDis(x_gen, z_real)
+        dx1_loss = nn.BCELoss()(dx1_prob, zeros) # Fake
+        dz1_loss = nn.BCELoss()(dz1_prob, ones) # Real
+        dc1_loss = nn.BCELoss()(dc1_prob, ones) # Mode 1
         # step
-        d_loss = d1_loss + d2_loss
+        if epoch < pre_epoch:
+            d_loss = dz0_loss + dz1_loss
+        else:
+            d_loss = dx0_loss + dz0_loss + dc0_loss + dx1_loss + dz1_loss + dc1_loss
         d_loss.backward()
         optDis.step()
 
         # Encoder
         zero_grad_list([netEnc, netGen, netDis])
         z_enc = netEnc(x_real)
-        e_prob, e_logit = netDis(x_real, z_enc)
-        e_loss = nn.BCELoss(e_prob, ones)
+        _, ez_prob, ec_prob = netDis(x_real, z_enc)
+        ez_loss = nn.BCELoss()(ez_prob, ones)
+        ec_loss = nn.BCELoss()(ec_prob, ones)
+        if epoch < pre_epoch:
+            e_loss = ez_loss
+        else:
+            e_loss = ez_loss + ec_loss
         e_loss.backward()
         optEnc.step()
 
         # Generator
         zero_grad_list([netEnc, netGen, netDis])
         x_gen = netGen(z_real)
-        g_prob, g_logit = netDis(x_real, z_enc)
-        g_loss = nn.BCELoss(g_prob, zeros)
-        g_loss.backward()
-        optGen.step()
-
+        gx_prob, _, gc_prob = netDis(x_gen, z_real)
+        gx_loss = nn.BCELoss()(gx_prob, ones)
+        gc_loss = nn.BCELoss()(gc_prob, zeros)
+        if epoch < pre_epoch:
+            pass
+        else:
+            g_loss = gx_loss + gc_loss
+            g_loss.backward()
+            optGen.step()
+        
         # Results
         if i % 50 == 0:
-            print("[%d/%d][%s/%d] D_loss: %.4f | G_loss: %.4f | E_loss: %.4f"\
-            %(epoch+1, num_epochs, str(i).zfill(4), len(dataloader), d_loss.item(), g_loss.mean().item(), e_loss.mean().item()))
+            if epoch < pre_epoch:
+                print("[%d/%d][%s/%d] D_loss: %.4f | G_loss: %.4f | E_loss: %.4f"\
+                %(epoch+1, num_epochs, str(i).zfill(4), len(dataloader), \
+                d_loss.item(), 0, e_loss.mean().item()))
+            else:
+                print("[%d/%d][%s/%d] D_loss: %.4f | G_loss: %.4f | E_loss: %.4f"\
+                %(epoch+1, num_epochs, str(i).zfill(4), len(dataloader), \
+                d_loss.item(), g_loss.mean().item(), e_loss.mean().item()))
         
         if i%200 == 0:
             # Output Images
-            x_fixed = netDec(z_fixed).cpu().detach()
+            x_rec = netGen(netEnc(x_fixed)).detach()
+            x_samp = netGen(z_fixed).detach()
+            x_fig = torch.cat([x_fixed[0:8], x_rec[0:8], x_fixed[8:16], x_rec[8:16], x_samp], 0)
+            x_fig = x_fig.cpu()
             plt.figure(figsize=(8,8))
-            plt.imshow(np.transpose(vutils.make_grid(x_fixed, padding=2, normalize=True).cpu(),(1,2,0)))
+            plt.imshow(np.transpose(vutils.make_grid(x_fig, padding=2, normalize=True).cpu(),(1,2,0)))
             plt.axis("off")
             plt.savefig(out_folder+str(epoch).zfill(2)+"_"+str(i).zfill(4)+".jpg", bbox_inches="tight")
             plt.close()
