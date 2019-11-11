@@ -14,6 +14,7 @@ torch.manual_seed(manualSeed)
 
 # Root directory for dataset
 dataroot = "datasets/celeba"
+#dataroot = "datasets/flower102"
 if not os.path.exists(dataroot):
     os.makedirs(dataroot)
 

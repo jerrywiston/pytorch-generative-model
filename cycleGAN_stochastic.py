@@ -27,12 +27,12 @@ def sample_z(mu, logvar):
     return mu + torch.exp(logvar / 2) * eps
 
 def NormalNLLLoss(x, mu, logvar):
-    NormalNLL =  -0.5 * (2*np.log(np.pi) + logvar) - (x - mu)**2 / (2*torch.exp(logvar/2))
-    return -1 * NormalNLL
+    NormalNLL =  -1 * (-0.5 * (2*np.log(np.pi) + logvar) - (x - mu)**2 / (2*torch.exp(logvar/2)))
+    return NormalNLL
 
-class GeneratorZ(nn.Module):
+class Encoder(nn.Module):
     def __init__(self, z_dim):
-        super(GeneratorZ, self).__init__()
+        super(Encoder, self).__init__()
         self.conv1 = Conv2d(3, 128, 5, stride=2)
         self.bn1 = nn.BatchNorm2d(128)
         
@@ -66,9 +66,9 @@ class GeneratorZ(nn.Module):
         self.z_samp = sample_z(self.z_mu, self.z_logvar)
         return self.z_samp, self.z_mu, self.z_logvar
 
-class GeneratorX(nn.Module):
+class Generator(nn.Module):
     def __init__(self, z_dim):
-        super(GeneratorX, self).__init__()
+        super(Generator, self).__init__()
         self.fc1 = nn.Linear(z_dim, 8*8*1024)
         
         self.up2 = nn.Upsample(scale_factor=2, mode='nearest')
@@ -146,13 +146,13 @@ class DiscriminatorX(nn.Module):
         self.d_prob = torch.sigmoid(self.d_logit)
         return self.d_prob, self.d_logit
 
-z_dim = 64
+z_dim = 128
 num_epochs = 20
 
-netGz = GeneratorZ(z_dim).to(device)
-netGz.apply(weights_init)
-netGx = GeneratorX(z_dim).to(device)
-netGx.apply(weights_init)
+netE = Encoder(z_dim).to(device)
+netE.apply(weights_init)
+netG = Generator(z_dim).to(device)
+netG.apply(weights_init)
 netDz = DiscriminatorZ(z_dim).to(device)
 netDz.apply(weights_init)
 netDx = DiscriminatorX().to(device)
@@ -162,7 +162,7 @@ def zero_grad_list(net_list):
     for net in net_list:
         net.zero_grad()
 
-paramsG = list(netGz.parameters()) + list(netGx.parameters())
+paramsG = list(netE.parameters()) + list(netG.parameters())
 optG = optim.Adam(paramsG, lr=2e-4, betas=(0.5, 0.999))
 paramsD = list(netDz.parameters()) + list(netDx.parameters())
 optD = optim.Adam(paramsD, lr=1e-4, betas=(0.5, 0.999))
@@ -172,7 +172,7 @@ for i, data in enumerate(dataloader, 0):
     break
 z_fixed = torch.randn(32, z_dim, device=device)
 
-model_name = "cycleGAN_stochastic"
+model_name = "cycleGAN_stochastic_128"
 out_folder = "out/" + model_name + "/"
 if not os.path.exists(out_folder):
     os.makedirs(out_folder)
@@ -184,7 +184,7 @@ print("Starting Training ...")
 lamda_gz = 0.01
 lamda_rx = 1.0
 lamda_gx = 1.0
-lamda_rz = 0.01
+lamda_rz = 0.1
 
 for epoch in range(num_epochs):
     for i, data in enumerate(dataloader, 0):
@@ -196,12 +196,12 @@ for epoch in range(num_epochs):
         zeros = torch.full((b_size, 1), 0.0, device=device)
 
         # =============== Train Discriminator ===============
-        zero_grad_list([netGz, netGx, netDz, netDx])
+        zero_grad_list([netE, netG, netDz, netDx])
 
         # D(Z)
         dz_real, _ = netDz(z_real)
         dz_real_loss = nn.BCELoss()(dz_real, ones)
-        z_samp, z_mu, z_logvar = netGz(x_real)
+        z_samp, z_mu, z_logvar = netE(x_real)
         dz_fake, _ = netDz(z_samp)
         dz_fake_loss = nn.BCELoss()(dz_fake, zeros)
         dz_loss = dz_real_loss + dz_fake_loss
@@ -210,7 +210,7 @@ for epoch in range(num_epochs):
         # D(X)
         dx_real, _ = netDx(x_real)
         dx_real_loss = nn.BCELoss()(dx_real, ones)
-        x_gen = netGx(z_real)
+        x_gen = netG(z_real)
         dx_fake, _ = netDx(x_gen)
         dx_fake_loss = nn.BCELoss()(dx_fake, zeros)
         dx_loss = dx_real_loss + dx_fake_loss
@@ -220,13 +220,14 @@ for epoch in range(num_epochs):
         optD.step()
 
         # =============== Train Generator ===============
-        zero_grad_list([netGz, netGx, netDz, netDx])
+        zero_grad_list([netE, netG, netDz, netDx])
 
         # (X -> Z -> X)
         # Reconstruction Loss
-        z_samp, z_mu, z_logvar = netGz(x_real)
-        x_rec = netGx(z_samp)
+        z_samp, z_mu, z_logvar = netE(x_real)
+        x_rec = netG(z_samp)
         rx_loss = nn.MSELoss()(x_rec, x_real)
+        rx_loss = torch.clamp(rx_loss, min=0.03) #Clip the Loss
         # Distribution Loss
         dz_fake, _ = netDz(z_samp)
         gz_loss = nn.BCELoss()(dz_fake, ones)
@@ -236,8 +237,8 @@ for epoch in range(num_epochs):
 
         # (Z -> X -> Z)
         # Reconstruction Loss
-        x_gen = netGx(z_real)
-        z_samp, z_mu, z_logvar = netGz(x_gen)
+        x_gen = netG(z_real)
+        z_samp, z_mu, z_logvar = netE(x_gen)
         rz_loss = NormalNLLLoss(z_real, z_mu, z_logvar).mean()
         # Distribution Loss
         dx_fake, _ = netDx(x_gen)
@@ -258,9 +259,9 @@ for epoch in range(num_epochs):
 
         if i%200 == 0:
             # Output Images
-            _, z_code, _ = netGz(x_fixed)
-            x_rec = netGx(z_code).detach()
-            x_samp = netGx(z_fixed).detach()
+            z_samp, z_mu, z_logvar = netE(x_fixed)
+            x_rec = netG(z_mu).detach()
+            x_samp = netG(z_fixed).detach()
             x_fig = torch.cat([x_fixed[0:8], x_rec[0:8], x_fixed[8:16], x_rec[8:16], x_samp], 0)
             x_fig = x_fig.cpu()
             plt.figure(figsize=(8,8))
@@ -269,7 +270,7 @@ for epoch in range(num_epochs):
             plt.savefig(out_folder+str(epoch).zfill(2)+"_"+str(i).zfill(4)+".jpg", bbox_inches="tight")
             plt.close()
             # Save Model
-            torch.save(netGx.state_dict(), save_folder+"netGx.pt")
+            torch.save(netE.state_dict(), save_folder+"netE.pt")
+            torch.save(netG.state_dict(), save_folder+"netG.pt")
             torch.save(netDx.state_dict(), save_folder+"netDx.pt")
-            torch.save(netGz.state_dict(), save_folder+"netGz.pt")
             torch.save(netDz.state_dict(), save_folder+"netDz.pt")

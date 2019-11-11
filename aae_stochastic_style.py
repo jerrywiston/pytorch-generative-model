@@ -108,17 +108,6 @@ class Discriminator(nn.Module):
         self.d_prob = torch.sigmoid(self.d_logit)
         return self.d_prob, self.d_logit
 
-class Projector(nn.Module):
-    def __init__(self):
-        super(Projector, self).__init__()
-        self.conv1 = Conv2d(3, 8, 5)
-        self.conv2 = Conv2d(8, 3, 5)
-
-    def forward(self, x):
-        self.h_conv1 = F.relu(self.conv1(x))
-        self.xp = self.conv2(self.h_conv1)
-        return self.xp
-
 z_dim = 64
 num_epochs = 20
 
@@ -128,20 +117,17 @@ netDec = Decoder(z_dim).to(device)
 netDec.apply(weights_init)
 netDis = Discriminator(z_dim).to(device)
 netDis.apply(weights_init)
-netProj = Projector().to(device)
-netProj.apply(weights_init)
 
 params = list(netEnc.parameters()) + list(netDec.parameters())
 optRec = optim.Adam(params, lr=2e-4, betas=(0.5, 0.999))
 optDis = optim.Adam(netDis.parameters(), lr=1e-4, betas=(0.5, 0.999))
-optProj = optim.Adam(params, lr=2e-4, betas=(0.5, 0.999))
 
 for i, data in enumerate(dataloader, 0):
     x_fixed = data[0].to(device)
     break
 z_fixed = torch.randn(32, z_dim, device=device)
 
-model_name = "aae_dist"
+model_name = "aae_random"
 out_folder = "out/" + model_name + "/"
 if not os.path.exists(out_folder):
     os.makedirs(out_folder)
@@ -184,20 +170,10 @@ for epoch in range(num_epochs):
         d_fake, _ = netDis(z_code)
         d_label.fill_(1.0)
         code_loss = nn.BCELoss()(d_fake, d_label)
-        rec_loss = nn.MSELoss()(netProj(x_rec), netProj(x_real))
+        rec_loss = nn.MSELoss()(x_rec, x_real)
         aae_loss = rec_loss + 0.001*code_loss
         aae_loss.backward()
         optRec.step()
-
-        # Reconstruction 2
-        netEnc.zero_grad()
-        netDec.zero_grad()
-        netDis.zero_grad()
-        z_code, _ = netEnc(x_real)
-        x_rec = netDec(z_code)
-        rec_loss = nn.MSELoss()(netProj(x_rec), netProj(x_real))
-        rec_loss.backward()
-        optProj.step()
 
         # Results
         if i % 50 == 0:

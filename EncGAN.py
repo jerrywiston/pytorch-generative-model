@@ -26,10 +26,15 @@ def sample_z(mu, logvar):
     eps = torch.randn(mu.size()).to(device)
     return mu + torch.exp(logvar / 2) * eps
 
+def NormalNLLLoss(x, mu, logvar):
+    NormalNLL =  -1 * (-0.5 * (2*np.log(np.pi) + logvar) - (x - mu)**2 / (2*torch.exp(logvar/2)))
+    return NormalNLL
+
 class Encoder(nn.Module):
     def __init__(self, z_dim):
         super(Encoder, self).__init__()
         self.conv1 = Conv2d(3, 128, 5, stride=2)
+        self.bn1 = nn.BatchNorm2d(128)
         
         self.conv2 = Conv2d(128, 256, 5, stride=2)
         self.bn2 = nn.BatchNorm2d(256)
@@ -44,7 +49,8 @@ class Encoder(nn.Module):
         self.fc5_logvar = nn.Linear(4*4*1024, z_dim)
     
     def forward(self, x):
-        self.h_conv1 = F.relu(self.conv1(x))
+        self.h_conv1 = self.conv1(x)
+        self.h_conv2 = F.relu(self.bn1(self.h_conv1))
         # (128, 32, 32)
         self.h_conv2 = self.conv2(self.h_conv1)
         self.h_conv2 = F.relu(self.bn2(self.h_conv2))
@@ -57,12 +63,15 @@ class Encoder(nn.Module):
         # (1024, 4, 4)
         self.z_mu = self.fc5_mu(self.h_conv4.view(-1,1024*4*4))
         self.z_logvar = self.fc5_logvar(self.h_conv4.view(-1,1024*4*4))
-        self.z_code = sample_z(self.z_mu, self.z_logvar)
-        return self.z_code, self.z_mu
+        self.z_samp = sample_z(self.z_mu, self.z_logvar)
+        # discriminator
+        self.disc = (self.z_samp**2).mean(1, keepdim=True)
+        self.disc_sq = torch.sigmoid(self.disc)
+        return self.z_samp, self.z_mu, self.z_logvar, self.disc_sq
 
-class Decoder(nn.Module):
+class Generator(nn.Module):
     def __init__(self, z_dim):
-        super(Decoder, self).__init__()
+        super(Generator, self).__init__()
         self.fc1 = nn.Linear(z_dim, 8*8*1024)
         
         self.up2 = nn.Upsample(scale_factor=2, mode='nearest')
@@ -92,56 +101,28 @@ class Decoder(nn.Module):
         self.x_samp = torch.sigmoid(self.h_conv4)
         return self.x_samp
 
-class Discriminator(nn.Module):
-    def __init__(self, z_dim):
-        super(Discriminator, self).__init__()
-        self.fc1 = nn.Linear(z_dim, 512)
-        self.fc2 = nn.Linear(512, 512)
-        self.fc3 = nn.Linear(512, 512)
-        self.fc4 = nn.Linear(512, 1)
-
-    def forward(self, z):
-        self.h1 = F.relu(self.fc1(z))
-        self.h2 = F.relu(self.fc2(self.h1))
-        self.h3 = F.relu(self.fc3(self.h2))
-        self.d_logit = self.fc4(self.h3)
-        self.d_prob = torch.sigmoid(self.d_logit)
-        return self.d_prob, self.d_logit
-
-class Projector(nn.Module):
-    def __init__(self):
-        super(Projector, self).__init__()
-        self.conv1 = Conv2d(3, 8, 5)
-        self.conv2 = Conv2d(8, 3, 5)
-
-    def forward(self, x):
-        self.h_conv1 = F.relu(self.conv1(x))
-        self.xp = self.conv2(self.h_conv1)
-        return self.xp
-
 z_dim = 64
 num_epochs = 20
+netE = Encoder(z_dim).to(device)
+netE.apply(weights_init)
+netG = Generator(z_dim).to(device)
+netG.apply(weights_init)
 
-netEnc = Encoder(z_dim).to(device)
-netEnc.apply(weights_init)
-netDec = Decoder(z_dim).to(device)
-netDec.apply(weights_init)
-netDis = Discriminator(z_dim).to(device)
-netDis.apply(weights_init)
-netProj = Projector().to(device)
-netProj.apply(weights_init)
+def zero_grad_list(net_list):
+    for net in net_list:
+        net.zero_grad()
 
-params = list(netEnc.parameters()) + list(netDec.parameters())
-optRec = optim.Adam(params, lr=2e-4, betas=(0.5, 0.999))
-optDis = optim.Adam(netDis.parameters(), lr=1e-4, betas=(0.5, 0.999))
-optProj = optim.Adam(params, lr=2e-4, betas=(0.5, 0.999))
+paramsR = list(netE.parameters()) + list(netG.parameters())
+optR = optim.Adam(paramsR, lr=2e-5, betas=(0.5, 0.999))
+optD = optim.Adam(netE.parameters(), lr=1e-4, betas=(0.5, 0.999))
+optG = optim.Adam(netG.parameters(), lr=2e-4, betas=(0.5, 0.999))
 
 for i, data in enumerate(dataloader, 0):
     x_fixed = data[0].to(device)
     break
 z_fixed = torch.randn(32, z_dim, device=device)
 
-model_name = "aae_dist"
+model_name = "test_model"
 out_folder = "out/" + model_name + "/"
 if not os.path.exists(out_folder):
     os.makedirs(out_folder)
@@ -152,63 +133,52 @@ if not os.path.exists(save_folder):
 print("Starting Training ...")
 for epoch in range(num_epochs):
     for i, data in enumerate(dataloader, 0):
-        # Initialize
-        netEnc.zero_grad()
-        netDec.zero_grad()
-        netDis.zero_grad()
+        # Prepare Batch
         x_real = data[0].to(device)
         b_size = x_real.size(0)
+        z_real = torch.randn(b_size, z_dim, device=device)
+        ones = torch.full((b_size, 1), 1.0, device=device)
+        zeros = torch.full((b_size, 1), 0.0, device=device)
 
-        # Adversarial
-        # Fake Batch
-        z_code, _ = netEnc(x_real)
-        d_fake, _ = netDis(z_code)
-        d_label = torch.full((b_size, 1), 0.0, device=device)
-        d_fake_loss = nn.BCELoss()(d_fake, d_label)
-        d_fake_loss.backward()
-        # Real Batch
-        z_samp = torch.randn(b_size, z_dim, device=device)
-        d_real, _ = netDis(z_samp)
-        d_label.fill_(1.0)
-        d_real_loss = nn.BCELoss()(d_real, d_label)
-        d_real_loss.backward()
+        # =============== Train Discriminator ===============
+        zero_grad_list([netE, netG])
+        z_samp, z_mu, z_logvar, d_real = netE(x_real)
+        d_real_loss = nn.BCELoss()(d_real, zeros)
+        x_gen = netG(z_real)
+        z_samp, z_mu, z_logvar, d_fake = netE(x_gen)
+        d_fake_loss = nn.BCELoss()(d_fake, ones)
         d_loss = d_real_loss + d_fake_loss
-        optDis.step()
+        d_loss.backward()
+        optD.step()
 
-        # Reconstruction
-        netEnc.zero_grad()
-        netDec.zero_grad()
-        netDis.zero_grad()
-        z_code, _ = netEnc(x_real)
-        x_rec = netDec(z_code)
-        d_fake, _ = netDis(z_code)
-        d_label.fill_(1.0)
-        code_loss = nn.BCELoss()(d_fake, d_label)
-        rec_loss = nn.MSELoss()(netProj(x_rec), netProj(x_real))
-        aae_loss = rec_loss + 0.001*code_loss
-        aae_loss.backward()
-        optRec.step()
+        # =============== Train Generator ===============
+        # Adversarial Loss
+        zero_grad_list([netE, netG])
+        x_gen = netG(z_real)
+        z_samp, z_mu, z_logvar, d_fake = netE(x_gen)
+        g_loss = nn.BCELoss()(d_fake, zeros)
+        g_loss.backward()
+        optG.step()
 
-        # Reconstruction 2
-        netEnc.zero_grad()
-        netDec.zero_grad()
-        netDis.zero_grad()
-        z_code, _ = netEnc(x_real)
-        x_rec = netDec(z_code)
-        rec_loss = nn.MSELoss()(netProj(x_rec), netProj(x_real))
-        rec_loss.backward()
-        optProj.step()
+        # =============== Mutual Information ===============
+        zero_grad_list([netE, netG])
+        x_gen = netG(z_real)
+        z_samp, z_mu, z_logvar, _ = netE(x_gen)
+        r_loss = NormalNLLLoss(z_real, z_mu, z_logvar).mean()
+        r_loss.backward()
+        optR.step()
 
-        # Results
+        # =============== Result ===============
         if i % 50 == 0:
-            print("[%d/%d][%s/%d] R_loss: %.4f | C_loss: %.4f | D_loss: %.4f"\
-            %(epoch+1, num_epochs, str(i).zfill(4), len(dataloader), rec_loss.item(), code_loss.mean().item(), d_loss.mean().item()))
-        
+            print("[%d/%d][%s/%d] R_loss: %.4f | D_loss: %.4f | G_loss: %.4f"\
+            %(epoch+1, num_epochs, str(i).zfill(4), len(dataloader),\
+            r_loss.item(), d_loss.mean().item(), g_loss.mean().item()))
+
         if i%200 == 0:
             # Output Images
-            _, z_code = netEnc(x_fixed)
-            x_rec = netDec(z_code).detach()
-            x_samp = netDec(z_fixed).detach()
+            z_samp, z_mu, z_logvar, _ = netE(x_fixed)
+            x_rec = netG(z_mu).detach()
+            x_samp = netG(z_fixed).detach()
             x_fig = torch.cat([x_fixed[0:8], x_rec[0:8], x_fixed[8:16], x_rec[8:16], x_samp], 0)
             x_fig = x_fig.cpu()
             plt.figure(figsize=(8,8))
@@ -217,6 +187,5 @@ for epoch in range(num_epochs):
             plt.savefig(out_folder+str(epoch).zfill(2)+"_"+str(i).zfill(4)+".jpg", bbox_inches="tight")
             plt.close()
             # Save Model
-            torch.save(netEnc.state_dict(), save_folder+"netEnc.pt")
-            torch.save(netDec.state_dict(), save_folder+"netDec.pt")
-            torch.save(netDis.state_dict(), save_folder+"netDis.pt")
+            torch.save(netE.state_dict(), save_folder+"netE.pt")
+            torch.save(netG.state_dict(), save_folder+"netG.pt")
