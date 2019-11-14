@@ -122,15 +122,15 @@ class Generator(nn.Module):
 
     def forward(self, z):
         h_fc1 = F.relu(self.fc1(z).view(-1,self.ndf*8,8,8)) 
-        h_res1 = resBlockBN(h_fc1, self.conv1_1, self.bn1_1, self.conv1_2, self.bn1_2, self.conv1_3)
+        h_res1 = self.res1(h_fc1)
         h_up2 = self.up2(h_res1)
-        h_res2 = resBlockBN(h_up2, self.conv2_1, self.bn2_1, self.conv2_2, self.bn2_2, self.conv2_3)
+        h_res2 = self.res2(h_up2)
         h_up3 = self.up3(h_res2)
-        h_res3 = resBlockBN(h_up3, self.conv3_1, self.bn3_1, self.conv3_2, self.bn3_2, self.conv3_3)
+        h_res3 = self.res3(h_up3)
         h_up4 = self.up4(h_res3)
-        h_res4 = resBlockBN(h_up4, self.conv4_1, self.bn4_1, self.conv4_2, self.bn4_2, self.conv4_3)
+        h_res4 = self.res4(h_up4)
         h_up5 = self.up5(h_res4)
-        h_res5 = resBlockBN(h_up5, self.conv5_1, self.bn5_1, self.conv5_2, self.bn5_2, self.conv5_3)
+        h_res5 = self.res5(h_up5)
         x_samp = torch.sigmoid(self.conv6(h_res5))
         return x_samp
 
@@ -161,31 +161,31 @@ class DiscriminatorX(nn.Module):
         self.res2 = ResBlock(ndf, ndf*2)
         self.pool2 = BlurPool2d(filt_size=3, channels=ndf*2, stride=2)
         # (32,32,256) -> (16,16,256)
-        self.res3 = ResBlock(ndf*2, ndf*2)
+        self.res3 = ResBlock(ndf*2, ndf*4)
         self.pool3 = BlurPool2d(filt_size=3, channels=ndf*4, stride=2)
         # (16,16,256) -> (8,8,256)
-        self.res4 = ResBlock(ndf*2, ndf*2)
+        self.res4 = ResBlock(ndf*4, ndf*8)
         self.pool4 = BlurPool2d(filt_size=3, channels=ndf*4, stride=2)
         # (8,8,256) -> (4,4,512)
-        self.res4 = ResBlock(ndf*2, ndf*4)
+        self.res4 = ResBlock(ndf*8, ndf*16)
         self.pool5 = BlurPool2d(filt_size=3, channels=ndf*8, stride=2)
         # (4*4*512 -> z_dim)
         self.fc6 = nn.utils.spectral_norm(nn.Linear(4*4*ndf*8, 1))
 
     def forward(self, x):
         # Res Block x6
-        h_res1 = resBlockSN(x, self.conv1_1, self.conv1_2, self.conv1_3)
+        h_res1 = self.res1(x)
         h_pool1 = self.pool1(h_res1)
-        h_res2 = resBlockSN(h_pool1, self.conv2_1, self.conv2_2, self.conv2_3)
+        h_res2 = self.res2(h_pool1)
         h_pool2 = self.pool2(h_res2)
-        h_res3 = resBlockSN(h_pool2, self.conv3_1, self.conv3_2, self.conv3_3)
+        h_res3 = self.res3(h_pool2)
         h_pool3 = self.pool3(h_res3)
-        h_res4 = resBlockSN(h_pool3, self.conv4_1, self.conv4_2, self.conv4_3)
+        h_res4 = self.res4(h_pool3)
         h_pool4 = self.pool4(h_res4)
-        h_res5 = resBlockSN(h_pool4, self.conv5_1, self.conv5_2, self.conv5_3)
+        h_res5 = self.res5(h_pool4)
         h_pool5 = self.pool5(h_res5)
         # Fully Connected
-        d_logit = self.fc6(h_pool5.view(-1,self.ndf*8*4*4))
+        d_logit = self.fc6(h_pool5.view(-1,self.ndf*16*4*4))
         d_prob = torch.sigmoid(d_logit)
         return d_prob, d_logit
 
