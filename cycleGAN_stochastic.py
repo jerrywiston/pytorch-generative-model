@@ -27,7 +27,7 @@ def sample_z(mu, logvar):
     return mu + torch.exp(logvar / 2) * eps
 
 def NormalNLLLoss(x, mu, logvar):
-    NormalNLL =  -1 * (-0.5 * (2*np.log(np.pi) + logvar) - (x - mu)**2 / (2*torch.exp(logvar/2)))
+    NormalNLL =  -1 * (-0.5 * (np.log(2*np.pi) + logvar) - (x - mu)**2 / (2*torch.exp(logvar)))
     return NormalNLL
 
 class Encoder(nn.Module):

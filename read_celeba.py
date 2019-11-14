@@ -18,8 +18,10 @@ dataroot = "datasets/celeba"
 if not os.path.exists(dataroot):
     os.makedirs(dataroot)
 
-image_size = 64
-batch_size = 64
+#image_size = 64
+#batch_size = 64
+image_size = 128
+batch_size = 16
 ngpu = 1
 
 # We can use an image folder dataset the way we have it setup.
