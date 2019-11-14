@@ -103,11 +103,12 @@ class Discriminator(nn.Module):
         self.bn4 = nn.BatchNorm2d(1024)
         
         self.fc5 = nn.Linear(4*4*1024, 512)
-        self.fc6 = nn.Linear(1024, 1)
-
+        
         self.zfc1 = nn.Linear(z_dim, 512)
         self.zfc2 = nn.Linear(512, 512)
-        self.zfc3 = nn.Linear(512, 512)
+        
+        self.fc6 = nn.Linear(1024, 512)
+        self.fc7 = nn.Linear(512, 1)
 
     def forward(self, x, z):
         self.h_conv1 = F.relu(self.conv1(x))
@@ -123,12 +124,12 @@ class Discriminator(nn.Module):
         # (1024, 4, 4)
         self.hx5 = self.fc5(self.h_conv4.view(-1,1024*4*4))
 
-        self.hz1 = F.relu(self.fc1(z))
-        self.hz2 = F.relu(self.fc2(self.h1))
-        self.hz3 = F.relu(self.fc3(self.h2))
+        self.hz1 = F.relu(self.zfc1(z))
+        self.hz2 = F.relu(self.zfc2(self.hz1))
 
-        self.h_concat = torch.cat([self.hx5, self.hz3])
-        self.d_logit = self.fc6(self.h_concat)
+        self.h_concat = torch.cat([self.hx5, self.hz2], 1)
+        self.h6 = self.fc6(self.h_concat)
+        self.d_logit = self.fc7(self.h6)
         self.d_prob = torch.sigmoid(self.d_logit)
         return self.d_prob, self.d_logit
 
@@ -175,13 +176,13 @@ for epoch in range(num_epochs):
         # X -> Z
         z_enc = netEnc(x_real)
         d0_prob, d0_logit = netDis(x_real, z_enc)
-        d0_loss = nn.BCELoss(d0_prob, zeros)
+        d0_loss = nn.BCELoss()(d0_prob, zeros)
         # Z -> X
         x_gen = netGen(z_real)
         d1_prob, d1_logit = netDis(x_gen, z_real)
-        d1_loss = nn.BCELoss(d1_prob, ones)
+        d1_loss = nn.BCELoss()(d1_prob, ones)
         # step
-        d_loss = d1_loss + d2_loss
+        d_loss = d0_loss + d1_loss
         d_loss.backward()
         optDis.step()
 
@@ -189,15 +190,15 @@ for epoch in range(num_epochs):
         zero_grad_list([netEnc, netGen, netDis])
         z_enc = netEnc(x_real)
         e_prob, e_logit = netDis(x_real, z_enc)
-        e_loss = nn.BCELoss(e_prob, ones)
+        e_loss = nn.BCELoss()(e_prob, ones)
         e_loss.backward()
         optEnc.step()
 
         # Generator
         zero_grad_list([netEnc, netGen, netDis])
         x_gen = netGen(z_real)
-        g_prob, g_logit = netDis(x_real, z_enc)
-        g_loss = nn.BCELoss(g_prob, zeros)
+        g_prob, g_logit = netDis(x_gen, z_real)
+        g_loss = nn.BCELoss()(g_prob, zeros)
         g_loss.backward()
         optGen.step()
 
@@ -208,7 +209,7 @@ for epoch in range(num_epochs):
         
         if i%200 == 0:
             # Output Images
-            x_fixed = netDec(z_fixed).cpu().detach()
+            x_fixed = netGen(z_fixed).cpu().detach()
             plt.figure(figsize=(8,8))
             plt.imshow(np.transpose(vutils.make_grid(x_fixed, padding=2, normalize=True).cpu(),(1,2,0)))
             plt.axis("off")
