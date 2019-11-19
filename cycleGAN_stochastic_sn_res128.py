@@ -24,75 +24,72 @@ def weights_init(m):
         nn.init.constant_(m.bias.data, 0)
 
 def NormalNLLLoss(x, mu, logvar):
-    NormalNLL =  -1 * (-0.5 * (np.log(2*np.pi) + logvar) - (x - mu)**2 / (2*torch.exp(logvar)))
+    #NormalNLL =  0.5 * (np.log(2*np.pi) + logvar) + (x - mu)**2 / (2*torch.exp(logvar/2))
+    NormalNLL =  0.5 * (np.log(2*np.pi) + logvar) + (x - mu)**2 / (2*torch.exp(logvar))
     return NormalNLL
 
-def resBlockBN(x, conv1, bn1, conv2, bn2, conv3):
-    h_conv1 = F.relu(bn1(conv1(x)), inplace=True)
-    h_conv2 = bn2(conv2(h_conv1))
-    out = F.relu(h_conv2 + conv3(x), inplace=True)
-    return out
-
-def resBlockSN(x, conv1, conv2, conv3):
-    h_conv1 = F.relu(conv1(x), inplace=True)
-    h_conv2 = conv2(h_conv1)
-    out = F.relu(h_conv2 + conv3(x), inplace=True)
-    return out
+class ResBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, sn=True, bn=True):
+        super(ResBlock, self).__init__()
+        self.bn = bn
+        self.sn = sn
+        if sn:
+            self.conv0 = nn.utils.spectral_norm(nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, stride=1, padding=0))
+            self.conv1 = nn.utils.spectral_norm(nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1))
+            self.conv2 = nn.utils.spectral_norm(nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1))
+        else:
+            self.conv0 = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, stride=1, padding=0)
+            self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1)
+            self.conv2 = nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1)
+        if bn:
+            self.bn1 = nn.BatchNorm2d(out_channels)
+            self.bn2 = nn.BatchNorm2d(out_channels)
+    
+    def forward(self, x):
+        h_conv0 = self.conv0(x)
+        if self.bn:
+            h_conv1 = F.relu(self.bn1(self.conv1(x)), inplace=True)
+            h_conv2 = self.bn2(self.conv2(h_conv1))
+        else:
+            h_conv1 = F.relu(self.conv1(x), inplace=True)
+            h_conv2 = self.conv2(h_conv1)
+        out = F.relu(h_conv0 + h_conv2, inplace=True)
+        return out
 
 class Encoder(nn.Module):
     def __init__(self, z_dim, ndf=128):
         super(Encoder, self).__init__()
         self.ndf = ndf
-        # (128,128,3) -> (64,64,128)
-        self.conv1_1 = Conv2d(3, ndf, 3, stride=1)
-        self.bn1_1 = nn.BatchNorm2d(ndf)
-        self.conv1_2 = Conv2d(ndf, ndf, 3, stride=1)
-        self.bn1_2 = nn.BatchNorm2d(ndf)
-        self.conv1_3 = Conv2d(3, ndf, 1, stride=1)
+        # (128,128,3) -> (64,64,64)
+        self.res1 = ResBlock(3, ndf, sn=False)
         self.pool1 = BlurPool2d(filt_size=3, channels=ndf, stride=2)
-        # (64,64,128) -> (32,32,256)
-        self.conv2_1 = Conv2d(ndf, ndf*2, 3, stride=1)
-        self.bn2_1 = nn.BatchNorm2d(ndf*2)
-        self.conv2_2 = Conv2d(ndf*2, ndf*2, 3, stride=1)
-        self.bn2_2 = nn.BatchNorm2d(ndf*2)
-        self.conv2_3 = Conv2d(ndf, ndf*2, 1, stride=1)
+        # (64,64,64) -> (32,32,128)
+        self.res2 = ResBlock(ndf, ndf*2, sn=False)
         self.pool2 = BlurPool2d(filt_size=3, channels=ndf*2, stride=2)
-        # (32,32,256) -> (16,16,256)
-        self.conv3_1 = Conv2d(ndf*2, ndf*4, 3, stride=1)
-        self.bn3_1 = nn.BatchNorm2d(ndf*4)
-        self.conv3_2 = Conv2d(ndf*4, ndf*4, 3, stride=1)
-        self.bn3_2 = nn.BatchNorm2d(ndf*4)
-        self.conv3_3 = Conv2d(ndf*2, ndf*4, 1, stride=1)
+        # (32,32,128) -> (16,16,256)
+        self.res3 = ResBlock(ndf*2, ndf*4, sn=False)
         self.pool3 = BlurPool2d(filt_size=3, channels=ndf*4, stride=2)
-        # (16,16,256) -> (8,8,256)
-        self.conv4_1 = Conv2d(ndf*4, ndf*4, 3, stride=1)
-        self.bn4_1 = nn.BatchNorm2d(ndf*4)
-        self.conv4_2 = Conv2d(ndf*4, ndf*4, 3, stride=1)
-        self.bn4_2 = nn.BatchNorm2d(ndf*4)
-        self.conv4_3 = Conv2d(ndf*4, ndf*4, 1, stride=1)
+        # (16,16,256) -> (8,8,512)
+        self.res4 = ResBlock(ndf*4, ndf*4, sn=False)
         self.pool4 = BlurPool2d(filt_size=3, channels=ndf*4, stride=2)
-        # (8,8,256) -> (4,4,512)
-        self.conv5_1 = Conv2d(ndf*4, ndf*8, 3, stride=1)
-        self.bn5_1 = nn.BatchNorm2d(ndf*8)
-        self.conv5_2 = Conv2d(ndf*8, ndf*8, 3, stride=1)
-        self.bn5_2 = nn.BatchNorm2d(ndf*8)
-        self.conv5_3 = Conv2d(ndf*4, ndf*8, 1, stride=1)
+        # (8,8,512) -> (4,4,1024)
+        self.res5 = ResBlock(ndf*4, ndf*8, sn=False)
         self.pool5 = BlurPool2d(filt_size=3, channels=ndf*8, stride=2)
-        # (4*4*512 -> z_dim)
+        # (4*4*1024 -> z_dim)
         self.fc6_mu = nn.Linear(4*4*ndf*8, z_dim)
         self.fc6_logvar = nn.Linear(4*4*ndf*8, z_dim)
     
     def forward(self, x):
-        # Res Block x6
-        h_res1 = resBlockBN(x, self.conv1_1, self.bn1_1, self.conv1_2, self.bn1_2, self.conv1_3)
+        # Res Block
+        h_res1 = self.res1(x)
         h_pool1 = self.pool1(h_res1)
-        h_res2 = resBlockBN(h_pool1, self.conv2_1, self.bn2_1, self.conv2_2, self.bn2_2, self.conv2_3)
+        h_res2 = self.res2(h_pool1)
         h_pool2 = self.pool2(h_res2)
-        h_res3 = resBlockBN(h_pool2, self.conv3_1, self.bn3_1, self.conv3_2, self.bn3_2, self.conv3_3)
+        h_res3 = self.res3(h_pool2)
         h_pool3 = self.pool3(h_res3)
-        h_res4 = resBlockBN(h_pool3, self.conv4_1, self.bn4_1, self.conv4_2, self.bn4_2, self.conv4_3)
+        h_res4 = self.res4(h_pool3)
         h_pool4 = self.pool4(h_res4)
-        h_res5 = resBlockBN(h_pool4, self.conv5_1, self.bn5_1, self.conv5_2, self.bn5_2, self.conv5_3)
+        h_res5 = self.res5(h_pool4)
         h_pool5 = self.pool5(h_res5)
         # Fully Connected
         z_mu = self.fc6_mu(h_pool5.view(-1,self.ndf*8*4*4))
@@ -108,55 +105,35 @@ class Generator(nn.Module):
     def __init__(self, z_dim, ndf=64):
         super(Generator, self).__init__()
         self.ndf = ndf
-        self.fc1 = nn.Linear(z_dim, 8*8*ndf*8)
         # (8,8,512) -> (8,8,512)
-        self.conv1_1 = Conv2d(ndf*8, ndf*8, 3, stride=1)
-        self.bn1_1 = nn.BatchNorm2d(ndf*8)
-        self.conv1_2 = Conv2d(ndf*8, ndf*8, 3, stride=1)
-        self.bn1_2 = nn.BatchNorm2d(ndf*8)
-        self.conv1_3 = Conv2d(ndf*8, ndf*8, 1, stride=1)
+        self.fc1 = nn.Linear(z_dim, 8*8*ndf*8)
+        self.res1 = ResBlock(ndf*8,ndf*8, sn=False)
         # (8,8,512) -> (16,16,256)
-        self.up2 = nn.Upsample(scale_factor=2, mode='bilinear')
-        self.conv2_1 = Conv2d(ndf*8, ndf*4, 3, stride=1)
-        self.bn2_1 = nn.BatchNorm2d(ndf*4)
-        self.conv2_2 = Conv2d(ndf*4, ndf*4, 3, stride=1)
-        self.bn2_2 = nn.BatchNorm2d(ndf*4)
-        self.conv2_3 = Conv2d(ndf*8, ndf*4, 1, stride=1)
+        self.up2 = nn.Upsample(scale_factor=2, mode='nearest')
+        self.res2 = ResBlock(ndf*8,ndf*4, sn=False)
         # (16,16,256) -> (32,32,256)
-        self.up3 = nn.Upsample(scale_factor=2, mode='bilinear')
-        self.conv3_1 = Conv2d(ndf*4, ndf*4, 3, stride=1)
-        self.bn3_1 = nn.BatchNorm2d(ndf*4)
-        self.conv3_2 = Conv2d(ndf*4, ndf*4, 3, stride=1)
-        self.bn3_2 = nn.BatchNorm2d(ndf*4)
-        self.conv3_3 = Conv2d(ndf*4, ndf*4, 1, stride=1)
+        self.up3 = nn.Upsample(scale_factor=2, mode='nearest')
+        self.res3 = ResBlock(ndf*4,ndf*4, sn=False)
         # (32,32,256) -> (64,64,128)
-        self.up4 = nn.Upsample(scale_factor=2, mode='bilinear')
-        self.conv4_1 = Conv2d(ndf*4, ndf*2, 3, stride=1)
-        self.bn4_1 = nn.BatchNorm2d(ndf*2)
-        self.conv4_2 = Conv2d(ndf*2, ndf*2, 3, stride=1)
-        self.bn4_2 = nn.BatchNorm2d(ndf*2)
-        self.conv4_3 = Conv2d(ndf*4, ndf*2, 1, stride=1)
+        self.up4 = nn.Upsample(scale_factor=2, mode='nearest')
+        self.res4 = ResBlock(ndf*4,ndf*2, sn=False)
         # (64,64,128) -> (128,128,64)
-        self.up5 = nn.Upsample(scale_factor=2, mode='bilinear')
-        self.conv5_1 = Conv2d(ndf*2, ndf*1, 3, stride=1)
-        self.bn5_1 = nn.BatchNorm2d(ndf*1)
-        self.conv5_2 = Conv2d(ndf*1, ndf*1, 3, stride=1)
-        self.bn5_2 = nn.BatchNorm2d(ndf*1)
-        self.conv5_3 = Conv2d(ndf*2, ndf*1, 1, stride=1)
+        self.up5 = nn.Upsample(scale_factor=2, mode='nearest')
+        self.res5 = ResBlock(ndf*2,ndf*1, sn=False)
         # (128,128,64) -> (128,128,3)
-        self.conv6 = Conv2d(ndf*1, 3, 3, stride=1)
+        self.conv6 = nn.Conv2d(in_channels=ndf, out_channels=3, kernel_size=3, stride=1, padding=1)
 
     def forward(self, z):
         h_fc1 = F.relu(self.fc1(z).view(-1,self.ndf*8,8,8)) 
-        h_res1 = resBlockBN(h_fc1, self.conv1_1, self.bn1_1, self.conv1_2, self.bn1_2, self.conv1_3)
+        h_res1 = self.res1(h_fc1)
         h_up2 = self.up2(h_res1)
-        h_res2 = resBlockBN(h_up2, self.conv2_1, self.bn2_1, self.conv2_2, self.bn2_2, self.conv2_3)
+        h_res2 = self.res2(h_up2)
         h_up3 = self.up3(h_res2)
-        h_res3 = resBlockBN(h_up3, self.conv3_1, self.bn3_1, self.conv3_2, self.bn3_2, self.conv3_3)
+        h_res3 = self.res3(h_up3)
         h_up4 = self.up4(h_res3)
-        h_res4 = resBlockBN(h_up4, self.conv4_1, self.bn4_1, self.conv4_2, self.bn4_2, self.conv4_3)
+        h_res4 = self.res4(h_up4)
         h_up5 = self.up5(h_res4)
-        h_res5 = resBlockBN(h_up5, self.conv5_1, self.bn5_1, self.conv5_2, self.bn5_2, self.conv5_3)
+        h_res5 = self.res5(h_up5)
         x_samp = torch.sigmoid(self.conv6(h_res5))
         return x_samp
 
@@ -180,45 +157,35 @@ class DiscriminatorX(nn.Module):
     def __init__(self, ndf=128):
         super(DiscriminatorX, self).__init__()
         self.ndf = ndf
-        # (128,128,3) -> (64,64,128)
-        self.conv1_1 = nn.utils.spectral_norm(Conv2d(3, ndf, 3, stride=1))
-        self.conv1_2 = nn.utils.spectral_norm(Conv2d(ndf, ndf, 3, stride=1))
-        self.conv1_3 = nn.utils.spectral_norm(Conv2d(3, ndf, 1, stride=1))
+        # (128,128,3) -> (64,64,64)
+        self.res1 = ResBlock(3, ndf, bn=False)
         self.pool1 = BlurPool2d(filt_size=3, channels=ndf, stride=2)
-        # (64,64,128) -> (32,32,256)
-        self.conv2_1 = nn.utils.spectral_norm(Conv2d(ndf, ndf*2, 3, stride=1))
-        self.conv2_2 = nn.utils.spectral_norm(Conv2d(ndf*2, ndf*2, 3, stride=1))
-        self.conv2_3 = nn.utils.spectral_norm(Conv2d(ndf, ndf*2, 1, stride=1))
+        # (64,64,64) -> (32,32,128)
+        self.res2 = ResBlock(ndf, ndf*2, bn=False)
         self.pool2 = BlurPool2d(filt_size=3, channels=ndf*2, stride=2)
-        # (32,32,256) -> (16,16,256)
-        self.conv3_1 = nn.utils.spectral_norm(Conv2d(ndf*2, ndf*4, 3, stride=1))
-        self.conv3_2 = nn.utils.spectral_norm(Conv2d(ndf*4, ndf*4, 3, stride=1))
-        self.conv3_3 = nn.utils.spectral_norm(Conv2d(ndf*2, ndf*4, 1, stride=1))
+        # (32,32,128) -> (16,16,256)
+        self.res3 = ResBlock(ndf*2, ndf*4, bn=False)
         self.pool3 = BlurPool2d(filt_size=3, channels=ndf*4, stride=2)
-        # (16,16,256) -> (8,8,256)
-        self.conv4_1 = nn.utils.spectral_norm(Conv2d(ndf*4, ndf*4, 3, stride=1))
-        self.conv4_2 = nn.utils.spectral_norm(Conv2d(ndf*4, ndf*4, 3, stride=1))
-        self.conv4_3 = nn.utils.spectral_norm(Conv2d(ndf*4, ndf*4, 1, stride=1))
+        # (16,16,256) -> (8,8,512)
+        self.res4 = ResBlock(ndf*4, ndf*4, bn=False)
         self.pool4 = BlurPool2d(filt_size=3, channels=ndf*4, stride=2)
-        # (8,8,256) -> (4,4,512)
-        self.conv5_1 = nn.utils.spectral_norm(Conv2d(ndf*4, ndf*8, 3, stride=1))
-        self.conv5_2 = nn.utils.spectral_norm(Conv2d(ndf*8, ndf*8, 3, stride=1))
-        self.conv5_3 = nn.utils.spectral_norm(Conv2d(ndf*4, ndf*8, 1, stride=1))
+        # (8,8,512) -> (4,4,1024)
+        self.res5 = ResBlock(ndf*4, ndf*8, bn=False)
         self.pool5 = BlurPool2d(filt_size=3, channels=ndf*8, stride=2)
-        # (4*4*512 -> z_dim)
+        # (4*4*1024 -> 1)
         self.fc6 = nn.Linear(4*4*ndf*8, 1)
 
     def forward(self, x):
         # Res Block x6
-        h_res1 = resBlockSN(x, self.conv1_1, self.conv1_2, self.conv1_3)
+        h_res1 = self.res1(x)
         h_pool1 = self.pool1(h_res1)
-        h_res2 = resBlockSN(h_pool1, self.conv2_1, self.conv2_2, self.conv2_3)
+        h_res2 = self.res2(h_pool1)
         h_pool2 = self.pool2(h_res2)
-        h_res3 = resBlockSN(h_pool2, self.conv3_1, self.conv3_2, self.conv3_3)
+        h_res3 = self.res3(h_pool2)
         h_pool3 = self.pool3(h_res3)
-        h_res4 = resBlockSN(h_pool3, self.conv4_1, self.conv4_2, self.conv4_3)
+        h_res4 = self.res4(h_pool3)
         h_pool4 = self.pool4(h_res4)
-        h_res5 = resBlockSN(h_pool4, self.conv5_1, self.conv5_2, self.conv5_3)
+        h_res5 = self.res5(h_pool4)
         h_pool5 = self.pool5(h_res5)
         # Fully Connected
         d_logit = self.fc6(h_pool5.view(-1,self.ndf*8*4*4))
@@ -251,7 +218,7 @@ for i, data in enumerate(dataloader, 0):
     break
 z_fixed = torch.randn(32, z_dim, device=device)
 
-model_name = "cycleGAN_stochastic_sn_res128_2"
+model_name = "cycleGAN_stochastic_sn_res128_3"
 out_folder = "out/" + model_name + "/"
 if not os.path.exists(out_folder):
     os.makedirs(out_folder)
@@ -261,7 +228,7 @@ if not os.path.exists(save_folder):
 
 print("Starting Training ...")
 lamda_gz = 1.0
-lamda_rx = 2.0
+lamda_rx = 1.0
 lamda_gx = 1.0
 lamda_rz = 1.0
 
@@ -304,7 +271,7 @@ for epoch in range(num_epochs):
         z_samp, z_mu, z_logvar = netE(x_real)
         x_rec = netG(z_samp)
         rx_loss = nn.MSELoss()(x_rec, x_real)
-        rx_loss = torch.clamp(rx_loss, min=0.01) #Clip the Loss
+        rx_loss = torch.clamp(rx_loss, min=0.01) # Clip the Reconstruction Loss
         # Distribution Loss
         dz_fake, _ = netDz(z_samp)
         gz_loss = nn.BCELoss()(dz_fake, ones)
