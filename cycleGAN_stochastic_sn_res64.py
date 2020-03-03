@@ -24,7 +24,7 @@ def weights_init(m):
         nn.init.constant_(m.bias.data, 0)
 
 def NormalNLLLoss(x, mu, logvar):
-    NormalNLL =  0.5 * (np.log(2*np.pi) + logvar + (x - mu)**2 / torch.exp(logvar))
+    NormalNLL =  0.5 * (np.log(2*np.pi) + logvar) + (x - mu)**2 / (2*torch.exp(logvar))
     return NormalNLL
 
 class ResBlock(nn.Module):
@@ -270,7 +270,7 @@ for epoch in range(num_epochs):
         z_samp, z_mu, z_logvar = netE(x_real)
         x_rec = netG(z_samp)
         rx_loss = nn.MSELoss()(x_rec, x_real)
-        #rx_loss = torch.clamp(rx_loss, min=0.01) # Clip the Reconstruction Loss
+        rx_loss = torch.clamp(rx_loss, min=0.01) # Clip the Reconstruction Loss
         # Distribution Loss
         dz_fake, _ = netDz(z_samp)
         gz_loss = nn.BCELoss()(dz_fake, ones)
