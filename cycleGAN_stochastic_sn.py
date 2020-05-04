@@ -127,8 +127,8 @@ class DiscriminatorX(nn.Module):
         d_prob = torch.sigmoid(d_logit)
         return d_prob, d_logit
 
-z_dim = 64
-num_epochs = 20
+z_dim = 128
+num_epochs = 200
 
 netE = Encoder(z_dim).to(device)
 netE.apply(weights_init)
@@ -153,7 +153,7 @@ for i, data in enumerate(dataloader, 0):
     break
 z_fixed = torch.randn(32, z_dim, device=device)
 
-model_name = "cycleGAN_stochastic_sn"
+model_name = "cycleGAN_stochastic_sn_flower"
 out_folder = "out/" + model_name + "/"
 if not os.path.exists(out_folder):
     os.makedirs(out_folder)

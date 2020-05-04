@@ -71,12 +71,9 @@ class Encoder(nn.Module):
         # (16,16,256) -> (8,8,512)
         self.res4 = ResBlock(ndf*4, ndf*4, sn=False)
         self.pool4 = BlurPool2d(filt_size=3, channels=ndf*4, stride=2)
-        # (8,8,512) -> (4,4,1024)
-        self.res5 = ResBlock(ndf*4, ndf*8, sn=False)
-        self.pool5 = BlurPool2d(filt_size=3, channels=ndf*8, stride=2)
         # (4*4*1024 -> z_dim)
-        self.fc6_mu = nn.Linear(4*4*ndf*8, z_dim)
-        self.fc6_logvar = nn.Linear(4*4*ndf*8, z_dim)
+        self.fc5_mu = nn.Linear(4*4*ndf*4, z_dim)
+        self.fc5_logvar = nn.Linear(4*4*ndf*4, z_dim)
     
     def forward(self, x):
         # Res Block
@@ -88,11 +85,9 @@ class Encoder(nn.Module):
         h_pool3 = self.pool3(h_res3)
         h_res4 = self.res4(h_pool3)
         h_pool4 = self.pool4(h_res4)
-        h_res5 = self.res5(h_pool4)
-        h_pool5 = self.pool5(h_res5)
         # Fully Connected
-        z_mu = self.fc6_mu(h_pool5.view(-1,self.ndf*8*4*4))
-        z_logvar = self.fc6_logvar(h_pool5.view(-1,self.ndf*8*4*4))
+        z_mu = self.fc5_mu(h_pool4.view(-1,self.ndf*4*4*4))
+        z_logvar = self.fc5_logvar(h_pool4.view(-1,self.ndf*4*4*4))
         z_samp = self.sample_z(z_mu, z_logvar)
         return z_samp, z_mu, z_logvar
     
@@ -116,11 +111,8 @@ class Generator(nn.Module):
         # (32,32,256) -> (64,64,128)
         self.up4 = nn.Upsample(scale_factor=2, mode='nearest')
         self.res4 = ResBlock(ndf*4,ndf*2, sn=False)
-        # (64,64,128) -> (128,128,64)
-        self.up5 = nn.Upsample(scale_factor=2, mode='nearest')
-        self.res5 = ResBlock(ndf*2,ndf*1, sn=False)
-        # (128,128,64) -> (128,128,3)
-        self.conv6 = nn.Conv2d(in_channels=ndf, out_channels=3, kernel_size=3, stride=1, padding=1)
+        # (64,64,64) -> (64,64,3)
+        self.conv5 = nn.Conv2d(in_channels=ndf*2, out_channels=3, kernel_size=3, stride=1, padding=1)
 
     def forward(self, z):
         h_fc1 = F.relu(self.fc1(z).view(-1,self.ndf*8,8,8)) 
@@ -131,9 +123,7 @@ class Generator(nn.Module):
         h_res3 = self.res3(h_up3)
         h_up4 = self.up4(h_res3)
         h_res4 = self.res4(h_up4)
-        h_up5 = self.up5(h_res4)
-        h_res5 = self.res5(h_up5)
-        x_samp = torch.sigmoid(self.conv6(h_res5))
+        x_samp = torch.sigmoid(self.conv5(h_res4))
         return x_samp
 
 class DiscriminatorZ(nn.Module):
@@ -168,11 +158,8 @@ class DiscriminatorX(nn.Module):
         # (16,16,256) -> (8,8,512)
         self.res4 = ResBlock(ndf*4, ndf*4, bn=False)
         self.pool4 = BlurPool2d(filt_size=3, channels=ndf*4, stride=2)
-        # (8,8,512) -> (4,4,1024)
-        self.res5 = ResBlock(ndf*4, ndf*8, bn=False)
-        self.pool5 = BlurPool2d(filt_size=3, channels=ndf*8, stride=2)
         # (4*4*1024 -> 1)
-        self.fc6 = nn.Linear(4*4*ndf*8, 1)
+        self.fc5 = nn.Linear(4*4*ndf*4, 1)
 
     def forward(self, x):
         # Res Block x6
@@ -184,15 +171,13 @@ class DiscriminatorX(nn.Module):
         h_pool3 = self.pool3(h_res3)
         h_res4 = self.res4(h_pool3)
         h_pool4 = self.pool4(h_res4)
-        h_res5 = self.res5(h_pool4)
-        h_pool5 = self.pool5(h_res5)
         # Fully Connected
-        d_logit = self.fc6(h_pool5.view(-1,self.ndf*8*4*4))
+        d_logit = self.fc5(h_pool4.view(-1,self.ndf*4*4*4))
         d_prob = torch.sigmoid(d_logit)
         return d_prob, d_logit
 
 z_dim = 128
-num_epochs = 20
+num_epochs = 200
 
 netE = Encoder(z_dim).to(device)
 netE.apply(weights_init)
@@ -217,7 +202,7 @@ for i, data in enumerate(dataloader, 0):
     break
 z_fixed = torch.randn(32, z_dim, device=device)
 
-model_name = "cycleGAN_stochastic_sn_res128_3"
+model_name = "cycleGAN_stochastic_sn_res128_3_flower"
 out_folder = "out/" + model_name + "/"
 if not os.path.exists(out_folder):
     os.makedirs(out_folder)
